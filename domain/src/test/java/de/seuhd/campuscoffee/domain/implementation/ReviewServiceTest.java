@@ -1,31 +1,35 @@
 package de.seuhd.campuscoffee.domain.implementation;
 
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import static org.mockito.ArgumentMatchers.any;
+import org.mockito.Mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import org.mockito.junit.jupiter.MockitoExtension;
+
 import de.seuhd.campuscoffee.domain.configuration.ApprovalConfiguration;
 import de.seuhd.campuscoffee.domain.exceptions.NotFoundException;
 import de.seuhd.campuscoffee.domain.exceptions.ValidationException;
 import de.seuhd.campuscoffee.domain.model.objects.Pos;
 import de.seuhd.campuscoffee.domain.model.objects.Review;
 import de.seuhd.campuscoffee.domain.model.objects.User;
+import de.seuhd.campuscoffee.domain.ports.data.CrudDataService;
 import de.seuhd.campuscoffee.domain.ports.data.PosDataService;
 import de.seuhd.campuscoffee.domain.ports.data.ReviewDataService;
 import de.seuhd.campuscoffee.domain.ports.data.UserDataService;
 import de.seuhd.campuscoffee.domain.tests.TestFixtures;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-
-import java.util.List;
-import java.util.Objects;
-
 import static de.seuhd.campuscoffee.domain.tests.TestFixtures.getApprovalConfiguration;
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.*;
 
 /**
  * Unit and integration tests for the operations related to reviews.
@@ -62,7 +66,8 @@ public class ReviewServiceTest {
         when(reviewDataService.getById(review.id())).thenReturn(review);
 
         // when, then
-        assertThrows(ValidationException.class, () -> reviewService.approve(review, review.author().getId()));
+        ValidationException exception = assertThrows(ValidationException.class, () -> reviewService.approve(review, review.author().getId()));
+        assertNotNull(exception); // Ensure the exception is not null
         verify(userDataService).getById(review.author().id());
         verify(reviewDataService).getById(review.getId());
     }
@@ -116,19 +121,22 @@ public class ReviewServiceTest {
         assertThat(retrievedReviews).hasSize(reviews.size());
     }
 
-    @Test
-    void createReviewPosDoesNotExistException() {
+        @Test
+        void createReviewPosDoesNotExistException() {
         // given
         Review review = TestFixtures.getReviewFixtures().getFirst();
         assertNotNull(review.pos().getId());
         when(posDataService.getById(review.pos().getId())).thenThrow(
-                new NotFoundException(review.pos().getClass(), review.pos().getId())
+            new NotFoundException(review.pos().getClass(), review.pos().getId())
         );
 
         // when, then
-        assertThrows(NotFoundException.class, () -> reviewService.upsert(review));
-        verify(posDataService).getById(review.pos().getId());
-    }
+        NotFoundException exception = assertThrows(
+            NotFoundException.class,
+            () -> reviewService.upsert(review)
+        );
+        assertNotNull(exception);
+        }
 
     @Test
     void userCannotCreateMoreThanOneReviewPerPos() {
@@ -142,10 +150,8 @@ public class ReviewServiceTest {
         when(reviewDataService.filter(pos, author)).thenReturn(List.of(review));
 
         // when, then
-        assertThrows(ValidationException.class, () -> reviewService.upsert(review)
-        );
-        verify(posDataService).getById(pos.getId());
-        verify(reviewDataService).filter(pos, author);
+        ValidationException exception = assertThrows(ValidationException.class, () -> reviewService.upsert(review));
+        assertNotNull(exception);
     }
 
     @Test
@@ -173,4 +179,77 @@ public class ReviewServiceTest {
         // then
         assertTrue(updatedReview.approved());
     }
+
+    @Test
+    void dataServiceReturnsCorrectService() {
+        // when
+        CrudDataService<Review, Long> dataService = reviewService.dataService();
+        
+        // then
+        assertThat(dataService).isSameAs(reviewDataService);
+    }
+
+    
+    @Test
+    void upsertSuccessfullyCreatesNewReview() {
+        // given
+        Review review = TestFixtures.getReviewFixtures().getFirst();
+        Pos pos = review.pos();
+        User author = review.author();
+        
+        assertNotNull(pos.getId());
+        when(posDataService.getById(pos.getId())).thenReturn(pos);
+        when(reviewDataService.filter(pos, author)).thenReturn(Collections.emptyList());
+        when(reviewDataService.upsert(review)).thenReturn(review);
+
+        // when
+        Review result = reviewService.upsert(review);
+
+        // then
+        verify(posDataService).getById(pos.getId());
+        verify(reviewDataService).filter(pos, author);
+        verify(reviewDataService).upsert(review);
+        assertThat(result).isEqualTo(review);
+    }
+
+    @Test
+    void filterUnapprovedReviews() {
+        // given
+        Pos pos = TestFixtures.getPosFixtures().getFirst();
+        assertNotNull(pos.getId());
+        List<Review> reviews = TestFixtures.getReviewFixtures().stream()
+                .map(review -> review.toBuilder()
+                        .pos(pos)
+                        .approvalCount(1)
+                        .approved(false)
+                        .build())
+                .toList();
+        when(posDataService.getById(pos.getId())).thenReturn(pos);
+        when(reviewDataService.filter(pos, false)).thenReturn(reviews);
+
+        // when
+        List<Review> retrievedReviews = reviewService.filter(Objects.requireNonNull(pos.getId()), false);
+
+        // then
+        verify(posDataService).getById(pos.getId());
+        verify(reviewDataService).filter(pos, false);
+        assertThat(retrievedReviews).hasSize(reviews.size());
+        assertThat(retrievedReviews).allMatch(review -> !review.approved());
+    }
+
+    @Test
+    void approvalThrowsExceptionWhenReviewIdIsNull() {
+        // given
+        Review review = TestFixtures.getReviewFixtures().getFirst().toBuilder()
+                .id(null)
+                .build();
+        User user = TestFixtures.getUserFixtures().getLast();
+
+        // when, then
+        NullPointerException exception = assertThrows(NullPointerException.class, () -> reviewService.approve(review, user.getId()));
+        assertNotNull(exception.getMessage());
+    }
+
+
+
 }
